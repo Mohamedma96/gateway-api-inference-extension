@@ -20,6 +20,7 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"sigs.k8s.io/controller-runtime/pkg/log"
@@ -38,6 +39,58 @@ import (
 const (
 	defaultCollectionTimeout = time.Second
 )
+
+// CollectorMetrics tracks operational metrics for a collector.
+// All fields use atomic operations for thread-safe access without locks.
+type CollectorMetrics struct {
+	// TotalInvocations counts the total number of collection cycles attempted
+	TotalInvocations atomic.Uint64
+
+	// TotalErrors counts the total number of errors encountered during collection
+	TotalErrors atomic.Uint64
+
+	// TotalSourceInvocations counts the total number of individual source Poll calls
+	TotalSourceInvocations atomic.Uint64
+
+	// TotalSourceErrors counts the total number of errors from individual source Poll calls
+	TotalSourceErrors atomic.Uint64
+
+	// LastInvocationTime records the timestamp of the last collection cycle
+	LastInvocationTime atomic.Value // stores time.Time
+
+	// LastErrorTime records the timestamp of the last error
+	LastErrorTime atomic.Value // stores time.Time
+}
+
+// NewCollectorMetrics creates a new CollectorMetrics instance.
+func NewCollectorMetrics() *CollectorMetrics {
+	m := &CollectorMetrics{}
+	m.LastInvocationTime.Store(time.Time{})
+	m.LastErrorTime.Store(time.Time{})
+	return m
+}
+
+// Snapshot returns a read-only snapshot of the current metrics.
+func (m *CollectorMetrics) Snapshot() CollectorMetricsSnapshot {
+	return CollectorMetricsSnapshot{
+		TotalInvocations:       m.TotalInvocations.Load(),
+		TotalErrors:            m.TotalErrors.Load(),
+		TotalSourceInvocations: m.TotalSourceInvocations.Load(),
+		TotalSourceErrors:      m.TotalSourceErrors.Load(),
+		LastInvocationTime:     m.LastInvocationTime.Load().(time.Time),
+		LastErrorTime:          m.LastErrorTime.Load().(time.Time),
+	}
+}
+
+// CollectorMetricsSnapshot is a read-only snapshot of collector metrics at a point in time.
+type CollectorMetricsSnapshot struct {
+	TotalInvocations       uint64
+	TotalErrors            uint64
+	TotalSourceInvocations uint64
+	TotalSourceErrors      uint64
+	LastInvocationTime     time.Time
+	LastErrorTime          time.Time
+}
 
 // Ticker implements a time source for periodic invocation.
 // The Ticker is passed in as parameter a Collector to allow control over time
@@ -74,12 +127,39 @@ type Collector struct {
 	startOnce sync.Once
 	stopOnce  sync.Once
 
-	// TODO: optional metrics tracking collection (e.g., errors, invocations, ...)
+	// metrics tracks operational statistics for this collector.
+	// nil when metrics tracking is disabled for zero overhead.
+	metrics *CollectorMetrics
 }
 
-// NewCollector returns a new collector.
-func NewCollector() *Collector {
-	return &Collector{}
+// CollectorOption is a functional option for configuring a Collector.
+type CollectorOption func(*Collector)
+
+// WithMetrics enables metrics tracking for the collector.
+// When not provided, metrics tracking is disabled for zero overhead.
+func WithMetrics() CollectorOption {
+	return func(c *Collector) {
+		c.metrics = NewCollectorMetrics()
+	}
+}
+
+// NewCollector returns a new collector with optional configuration.
+func NewCollector(opts ...CollectorOption) *Collector {
+	c := &Collector{}
+	for _, opt := range opts {
+		opt(c)
+	}
+	return c
+}
+
+// GetMetrics returns a snapshot of the collector's metrics.
+// Returns nil if metrics tracking is disabled.
+func (c *Collector) GetMetrics() *CollectorMetricsSnapshot {
+	if c.metrics == nil {
+		return nil
+	}
+	snapshot := c.metrics.Snapshot()
+	return &snapshot
 }
 
 // Start initiates data source collection for the endpoint.
@@ -123,11 +203,43 @@ func (c *Collector) Start(ctx context.Context, ticker Ticker, ep fwkdl.Endpoint,
 				case <-c.ctx.Done(): // per endpoint context cancelled
 					return
 				case <-ticker.Channel():
-					// TODO: do not collect if there's no pool specified?
+					// Track invocation if metrics enabled
+					if c.metrics != nil {
+						logger.V(logging.DEFAULT).Info("MOMO TotalInvocations increased")
+						c.metrics.TotalInvocations.Add(1)
+						c.metrics.LastInvocationTime.Store(time.Now())
+					} else {
+						logger.V(logging.DEFAULT).Info("MOMO c.metrics IS NULL")
+					}
+
+					// Collect from all sources
+					hasError := false
 					for _, src := range sources {
 						ctx, cancel := context.WithTimeout(c.ctx, defaultCollectionTimeout)
-						_ = src.Poll(ctx, endpoint) // TODO: track errors per collector?
-						cancel()                    // release the ctx timeout resources
+
+						// Track source invocation if metrics enabled
+						if c.metrics != nil {
+							logger.V(logging.DEFAULT).Info("MOMO TotalSourceInvocations increased")
+							c.metrics.TotalSourceInvocations.Add(1)
+						}
+
+						err := src.Poll(ctx, endpoint)
+						cancel() // release the ctx timeout resources
+
+						// Track errors if metrics enabled
+						if err != nil {
+							hasError = true
+							if c.metrics != nil {
+								c.metrics.TotalSourceErrors.Add(1)
+								c.metrics.LastErrorTime.Store(time.Now())
+							}
+							logger.V(logging.DEBUG).Error(err, "error collecting from source", "source", src.TypedName())
+						}
+					}
+
+					// Track cycle-level error if any source failed
+					if hasError && c.metrics != nil {
+						c.metrics.TotalErrors.Add(1)
 					}
 				}
 			}

@@ -57,18 +57,38 @@ type EndpointFactory interface {
 // EndpointLifecycle manages the life cycle (creation and termination) of
 // endpoints.
 type EndpointLifecycle struct {
-	sources         []fwkdl.DataSource // data sources for collectors
-	collectors      sync.Map           // collectors map. key: Pod namespaced name, value: *Collector
-	refreshInterval time.Duration      // metrics refresh interval
+	sources                []fwkdl.DataSource // data sources for collectors
+	collectors             sync.Map           // collectors map. key: Pod namespaced name, value: *Collector
+	refreshInterval        time.Duration      // metrics refresh interval
+	collectorOpts          []CollectorOption  // options to apply when creating collectors
+	enableCollectorMetrics bool               // whether to enable collector metrics tracking
+}
+
+// EndpointFactoryOption is a functional option for configuring EndpointLifecycle.
+type EndpointFactoryOption func(*EndpointLifecycle)
+
+// WithCollectorMetrics enables metrics tracking for all collectors created by this factory.
+func WithCollectorMetrics() EndpointFactoryOption {
+	return func(lc *EndpointLifecycle) {
+		lc.enableCollectorMetrics = true
+		lc.collectorOpts = append(lc.collectorOpts, WithMetrics())
+	}
 }
 
 // NewEndpointFactory returns a new endpoint for factory, managing collectors for
 // its endpoints. This function assumes that sources are not modified afterwards.
-func NewEndpointFactory(sources []fwkdl.DataSource, refreshMetricsInterval time.Duration) *EndpointLifecycle {
+func NewEndpointFactory(sources []fwkdl.DataSource, refreshMetricsInterval time.Duration, opts ...EndpointFactoryOption) *EndpointLifecycle {
 	eplc := &EndpointLifecycle{
 		collectors:      sync.Map{},
 		refreshInterval: refreshMetricsInterval,
+		collectorOpts:   []CollectorOption{},
 	}
+
+	// Apply options
+	for _, opt := range opts {
+		opt(eplc)
+	}
+
 	eplc.SetSources(sources)
 	return eplc
 }
@@ -93,7 +113,7 @@ func (lc *EndpointLifecycle) NewEndpoint(parent context.Context, inEndpointMetad
 	}
 
 	endpoint := fwkdl.NewEndpoint(inEndpointMetadata, nil)
-	collector := NewCollector() // TODO or full backward compatibility, set the logger and poolinfo
+	collector := NewCollector(lc.collectorOpts...)
 
 	if _, loaded := lc.collectors.LoadOrStore(key, collector); loaded {
 		// another goroutine already created and stored a collector for this endpoint.
@@ -130,4 +150,29 @@ func (lc *EndpointLifecycle) Shutdown() {
 		lc.collectors.Delete(key)
 		return true
 	})
+}
+
+// GetCollectorMetrics returns metrics for a specific endpoint's collector.
+// Returns nil if the collector doesn't exist or metrics tracking is disabled.
+func (lc *EndpointLifecycle) GetCollectorMetrics(key types.NamespacedName) *CollectorMetricsSnapshot {
+	if value, ok := lc.collectors.Load(key); ok {
+		collector := value.(*Collector)
+		return collector.GetMetrics()
+	}
+	return nil
+}
+
+// GetAllCollectorMetrics returns a map of all collector metrics keyed by endpoint name.
+// Only includes collectors that have metrics tracking enabled.
+func (lc *EndpointLifecycle) GetAllCollectorMetrics() map[types.NamespacedName]CollectorMetricsSnapshot {
+	result := make(map[types.NamespacedName]CollectorMetricsSnapshot)
+	lc.collectors.Range(func(key, value any) bool {
+		k := key.(types.NamespacedName)
+		collector := value.(*Collector)
+		if metrics := collector.GetMetrics(); metrics != nil {
+			result[k] = *metrics
+		}
+		return true
+	})
+	return result
 }

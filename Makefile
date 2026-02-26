@@ -22,7 +22,7 @@ SHELL = /usr/bin/env bash -o pipefail
 .SHELLFLAGS = -ec
 
 GIT_COMMIT_SHA ?= "$(shell git rev-parse HEAD 2>/dev/null)"
-GIT_TAG ?= $(shell git describe --tags --dirty --always)
+GIT_TAG ?= v3.3.3
 TARGETARCH ?= $(shell go env GOARCH)
 PLATFORMS ?= linux/$(TARGETARCH)
 DOCKER_BUILDX_CMD ?= docker buildx
@@ -97,7 +97,7 @@ endif
 
 
 # The name of the kind cluster to use for the "kind-load" target.
-KIND_CLUSTER ?= kind
+KIND_CLUSTER ?= llm-d-inference-scheduler-dev
 
 ##@ General
 

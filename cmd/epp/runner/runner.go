@@ -630,8 +630,10 @@ func (r *Runner) setupDataLayer(enableNewMetrics bool, cfg *datalayer.Config,
 }
 
 func (r *Runner) setupMetricsCollection(enableNewMetrics bool, opts *runserver.Options, pmc backendmetrics.PodMetricsClient) datalayer.EndpointFactory {
+	enableNewMetrics = true
+	setupLog.Info("data layer configuration", "enableNewMetrics", enableNewMetrics)
 	if enableNewMetrics {
-		return datalayer.NewEndpointFactory(nil, opts.RefreshMetricsInterval)
+		return datalayer.NewEndpointFactory(nil, opts.RefreshMetricsInterval, datalayer.WithCollectorMetrics())
 	}
 	return backendmetrics.NewPodMetricsFactory(pmc, opts.RefreshMetricsInterval)
 }
