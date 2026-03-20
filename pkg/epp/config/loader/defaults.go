@@ -18,13 +18,17 @@ package loader
 
 import (
 	"fmt"
+	"slices"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	configapi "sigs.k8s.io/gateway-api-inference-extension/apix/config/v1alpha1"
+	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/datalayer"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/flowcontrol/registry"
 	fwkplugin "sigs.k8s.io/gateway-api-inference-extension/pkg/epp/framework/interface/plugin"
 	framework "sigs.k8s.io/gateway-api-inference-extension/pkg/epp/framework/interface/scheduling"
+	extractormetrics "sigs.k8s.io/gateway-api-inference-extension/pkg/epp/framework/plugins/datalayer/extractor/metrics"
+	sourcemetrics "sigs.k8s.io/gateway-api-inference-extension/pkg/epp/framework/plugins/datalayer/source/metrics"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/framework/plugins/requesthandling/parsers/openai"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/framework/plugins/scheduling/picker"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/framework/plugins/scheduling/profile"
@@ -108,6 +112,9 @@ func applySystemDefaults(cfg *configapi.EndpointPickerConfig, handle fwkplugin.H
 	}
 	if err := ensureParser(cfg, handle, allPlugins); err != nil {
 		return fmt.Errorf("failed to apply parser defaults: %w", err)
+	}
+	if err := ensureDataLayer(cfg, handle, allPlugins); err != nil {
+		return fmt.Errorf("failed to apply data layer defaults: %w", err)
 	}
 	return nil
 }
@@ -226,6 +233,44 @@ func ensureParser(
 			return err
 		}
 	}
+	return nil
+}
+
+// ensureDataLayer guarantees that the data layer is configured when the dataLayer feature gate is enabled.
+// If the feature gate is enabled but no data section is provided, the default metrics-data-source and core-metrics-extractor plugins are injected.
+func ensureDataLayer(
+	cfg *configapi.EndpointPickerConfig,
+	handle fwkplugin.Handle,
+	allPlugins map[string]fwkplugin.Plugin,
+) error {
+	if !slices.Contains(cfg.FeatureGates, datalayer.ExperimentalDatalayerFeatureGate) {
+		return nil
+	}
+
+	if cfg.Data != nil && len(cfg.Data.Sources) > 0 {
+		return nil
+	}
+
+	if _, ok := allPlugins[sourcemetrics.MetricsDataSourceType]; !ok {
+		if err := registerDefaultPlugin(cfg, handle, sourcemetrics.MetricsDataSourceType); err != nil {
+			return err
+		}
+	}
+	if _, ok := allPlugins[extractormetrics.MetricsExtractorType]; !ok {
+		if err := registerDefaultPlugin(cfg, handle, extractormetrics.MetricsExtractorType); err != nil {
+			return err
+		}
+	}
+
+	cfg.Data = &configapi.DataLayerConfig{
+		Sources: []configapi.DataLayerSource{{
+			PluginRef: sourcemetrics.MetricsDataSourceType,
+			Extractors: []configapi.DataLayerExtractor{{
+				PluginRef: extractormetrics.MetricsExtractorType,
+			}},
+		}},
+	}
+
 	return nil
 }
 
