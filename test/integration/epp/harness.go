@@ -80,6 +80,8 @@ schedulingProfiles:
       - pluginRef: lora-affinity-scorer
 parser:
   pluginRef: openai-parser
+featureGates:
+  - disableDataLayer
 `
 )
 
