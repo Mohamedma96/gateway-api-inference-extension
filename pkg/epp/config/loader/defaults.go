@@ -52,6 +52,7 @@ func loadDefaultConfig() *configapi.EndpointPickerConfig {
 			APIVersion: "inference.networking.x-k8s.io/v1alpha1",
 			Kind:       "EndpointPickerConfig",
 		},
+		FeatureGates: []string{}, // Data layer is now enabled by default (no feature gate needed)
 		Plugins: []configapi.PluginSpec{
 			{
 				Type: queuedepth.QueueScorerType,
@@ -61,6 +62,12 @@ func loadDefaultConfig() *configapi.EndpointPickerConfig {
 			},
 			{
 				Type: prefix.PrefixCachePluginType,
+			},
+			{
+				Type: sourcemetrics.MetricsDataSourceType,
+			},
+			{
+				Type: extractormetrics.MetricsExtractorType,
 			},
 		},
 		SchedulingProfiles: []configapi.SchedulingProfile{
@@ -78,6 +85,16 @@ func loadDefaultConfig() *configapi.EndpointPickerConfig {
 					{
 						PluginRef: prefix.PrefixCachePluginType,
 						Weight:    &prefixCacheScorerWeight,
+					},
+				},
+			},
+		},
+		Data: &configapi.DataLayerConfig{
+			Sources: []configapi.DataLayerSource{
+				{
+					PluginRef: sourcemetrics.MetricsDataSourceType,
+					Extractors: []configapi.DataLayerExtractor{
+						{PluginRef: extractormetrics.MetricsExtractorType},
 					},
 				},
 			},
@@ -275,14 +292,14 @@ func ensureSaturationDetector(
 	return nil
 }
 
-// ensureDataLayer guarantees that the data layer is configured when the dataLayer feature gate is enabled.
-// If the feature gate is enabled but no data section is provided, the default metrics-data-source and core-metrics-extractor plugins are injected.
+// ensureDataLayer guarantees that the data layer is configured unless explicitly disabled.
+// If no data section is provided, the default plugins are added.
 func ensureDataLayer(
 	cfg *configapi.EndpointPickerConfig,
 	handle fwkplugin.Handle,
 	allPlugins map[string]fwkplugin.Plugin,
 ) error {
-	if !slices.Contains(cfg.FeatureGates, datalayer.ExperimentalDatalayerFeatureGate) {
+	if slices.Contains(cfg.FeatureGates, datalayer.DisableDataLayerFeatureGate) {
 		return nil
 	}
 
