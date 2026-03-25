@@ -214,8 +214,7 @@ func ensureSchedulingLayer(
 }
 
 // ensureFlowControlLayer guarantees that the flow control subsystem is structurally complete.
-func ensureFlowControlLayer(cfg *configapi.EndpointPickerConfig, handle fwkplugin.Handle, allPlugins map[string]fwkplugin.Plugin,
-) error {
+func ensureFlowControlLayer(cfg *configapi.EndpointPickerConfig, handle fwkplugin.Handle, allPlugins map[string]fwkplugin.Plugin) error {
 	if _, ok := allPlugins[registry.DefaultOrderingPolicyRef]; !ok {
 		if err := registerDefaultPlugin(cfg, handle, registry.DefaultOrderingPolicyRef); err != nil {
 			return err
@@ -252,11 +251,7 @@ func ensureParser(
 
 // ensureDataLayer guarantees that the data layer is configured unless explicitly disabled.
 // If no data section is provided, the default plugins are added.
-func ensureDataLayer(
-	cfg *configapi.EndpointPickerConfig,
-	handle fwkplugin.Handle,
-	allPlugins map[string]fwkplugin.Plugin,
-) error {
+func ensureDataLayer(cfg *configapi.EndpointPickerConfig, handle fwkplugin.Handle, allPlugins map[string]fwkplugin.Plugin) error {
 	if slices.Contains(cfg.FeatureGates, datalayer.DisableDataLayerFeatureGate) {
 		return nil
 	}
