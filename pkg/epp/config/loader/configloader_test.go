@@ -593,7 +593,6 @@ func TestBuildDataLayerConfigEmptySourcesWarning(t *testing.T) {
 	handle := utils.NewTestHandle(context.Background())
 	cfg, err := buildDataLayerConfig(
 		&configapi.DataLayerConfig{Sources: []configapi.DataLayerSource{}},
-		true, // dataLayerEnabled
 		handle,
 	)
 	require.NoError(t, err)
