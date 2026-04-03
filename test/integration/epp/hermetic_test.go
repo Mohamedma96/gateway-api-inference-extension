@@ -147,6 +147,8 @@ schedulingProfiles:
       - pluginRef: kv-cache-utilization-scorer
 parser:
   pluginRef: passthrough-parser
+featureGates:
+  - disableDataLayer
 `,
 					requests: integration.ReqRaw(
 						map[string]string{
